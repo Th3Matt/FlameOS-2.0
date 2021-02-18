@@ -1,0 +1,105 @@
+ [ org 0x7c00 ]
+ [ BITS 16 ]
+ 
+global start
+
+start:
+jmp 0x0000:Start
+
+%include 'Includes16/PrintFunc.asm'
+%include 'Includes16/DiskOp.asm'
+
+Start:
+    xchg bx, bx
+    
+    cli
+    xor ax, ax
+    mov ss, ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov sp, 1500h
+    mov bp, 500h
+    cld
+    sti
+    
+    mov [BootDrive], dl
+
+    call testA20
+    cmp ax, 1
+    je EA20
+    
+    call enableA20
+    
+EA20:
+    xchg bx, bx
+    mov cl, 2
+    mov ax, 0x1000
+    mov es, ax
+    mov al, 20
+    mov bx, 0x4600
+    
+    call diskLoad
+    
+    jmp Cont
+
+GDT: 
+    .NULL:
+        dq 0
+    
+    .CodeSeg:
+        dw 0FFFFh
+        dw 0
+        
+        db 0
+        db 010011010b
+        db 011011111b
+        db 0
+    .DataSeg:
+        dw 0FFFFh
+        dw 0
+        
+        db 0
+        db 010010010b
+        db 011011111b
+        db 0
+    
+    .end:
+    
+    .desc:
+        dw .end - GDT - 1
+        dd GDT
+
+%include 'Includes16/A20Func.asm'
+
+Cont:
+    cli
+    
+    lgdt [GDT.desc]
+
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    
+    jmp 0x8:Init32
+
+ [BITS 32]
+    
+Init32:
+    xchg bx, bx
+    mov ax, 0x10
+    mov ds, ax
+    mov ss, ax
+    mov es, ax
+    
+    jmp 0x14600
+
+times 509-($-$$) db 0
+
+BootDrive: db 0x00
+
+dw 0xAA55
+
+
+

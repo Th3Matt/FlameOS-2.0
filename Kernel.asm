@@ -2,11 +2,12 @@
 GDTTableLoc equ 0x13A00
 IDTTableLoc equ GDTTableLoc-0x1500-0x64+0xFA
 ErrorBackground equ 0x6
+KernSize equ 12
 
     [ BITS 32 ]
     [ ORG 0x0 ]
 
-KernStart:
+Stage2:
     xchg bx, bx
     
     mov ax, 0x10
@@ -34,15 +35,15 @@ KernStart:
         cmp edi, 0x14600
         jl .Clear
     
-    mov byte [0x15A00], 00000011b
-    mov byte [0x15A01], 0
-    mov dword [0x15A02], 0
+    mov byte [0x15E00], 00000011b
+    mov word [0x15E01], 0
+    mov dword [0x15E03], 0
     
     xchg bx, bx
-    mov edi, 0x16000
+    mov edi, 0x16500
     mov esi, 0x14600+Strings.Panic1
-    mov ecx, (80*2)
-    mov ah, 0xC
+    mov ecx, 80
+    mov ah, 0x0
 
     .Clear2:				; Writing the kernel panic screen to "Cached Screens"...
         mov al, [esi]
@@ -51,6 +52,18 @@ KernStart:
         inc esi
         
         loop .Clear2
+    
+    mov ecx, 80
+    mov ah, 0xC
+
+    .Clear2.1:				; Writing the kernel panic screen to "Cached Screens"...
+        mov al, [esi]
+        mov word [edi], ax
+        add edi, 2
+        inc esi
+        
+        loop .Clear2.1
+
     
     xchg bx, bx
     mov ecx, (80*3)
@@ -98,16 +111,16 @@ KernStart:
         
         loop .Clear6
     
-    mov dword [1500+0x03], 0x1000
+    mov dword [0x1500+0x04], 0x1000
     
-    mov word [1500+0x07], 0x8
+    mov word [0x1500+0x08], 0x8
     
-    mov word [1500+0x62], 0x64
+    mov word [0x1500+0x62], 0x64
 
     xchg bx, bx
     
  %include 'KernelParts/GDT.asm'
-    
+Kernel:
     mov ax, 0x8
     mov ss, ax
     mov ax, 0x18
@@ -190,7 +203,28 @@ KernStart:
     call Timer.init
     call PS2.init
     
-    mov ebx, 13
+    mov ch, 10001110b
+    mov ebx, 6
+    mov eax, Exceptions.UD
+
+    call IDT.ModEntry
+
+    mov ebx, 8
+    mov eax, Exceptions.DF
+
+    call IDT.ModEntry
+
+    mov ebx, 0xB
+    mov eax, Exceptions.NP
+
+    call IDT.ModEntry
+
+    mov ebx, 0xC
+    mov eax, Exceptions.SS
+
+    call IDT.ModEntry
+
+    mov ebx, 0xD
     mov eax, Exceptions.GP
 
     call IDT.ModEntry
@@ -207,6 +241,7 @@ KernStart:
     
     call IDT.ModEntry
     
+    mov ch, 11101110b
     mov ebx, 0x30
     mov eax, Syscall_
 
@@ -228,46 +263,40 @@ KernStart:
     
     call ATA.init
 
+    jnc .ATAPassed
+
+    mov eax, 0x0C540C41			; Printing "ATA" in red
+    mov gs:[edi], eax
+    add edi, 4
+    mov eax, 0x0C41
+    mov gs:[edi], eax
+    add edi, 4 
+
+    jmp $
+
+    .ATAPassed:
+    call FuncInit
+
     mov eax, 0x0A540A41			; Printing "ATA" in green
     mov gs:[edi], eax
     add edi, 4
     mov eax, 0x0A41
     mov gs:[edi], eax
     add edi, 4    
-
+ 
     push edi
-    mov eax, 1
-    mov ebx, 11
-    mov edi, 0x13600-0x1564-1
-    mov dx, 18h
-    mov es, dx
 
-    xchg bx, bx
-
-    call ATA.readSectors		; Reading INFO sector
-    pop edi
-    
-    mov eax, 0x0A4E0A49			; Printing "INFO" in green
-    mov gs:[edi], eax
-    add edi, 4
-    mov eax, 0x0A4F0A46
-    mov gs:[edi], eax
-    add edi, 6
-    
-    push edi
-    
-    mov edi, 6
+    mov edi, 7
     
     mov ax, 0x38
     mov es, ax
     
     mov byte [es:edi], 00000011b	; Setting up System VidBuffer
-    inc edi
-    inc edi
+    add edi, 3
     mov dword [es:edi], 0xFA0
     mov edi, 0xFA0
     mov esi, 0
-    mov ax, 0x50
+    mov ax, 0x48
     mov es, ax
     
     screencopyloop:			; Copying current screen to current VidBuffer
@@ -279,7 +308,7 @@ KernStart:
 	cmp esi, 0x50*25
 	jne screencopyloop
     
-    add byte [ds:0x19], 2
+    add byte [ds:0x14], 2
     mov dword [ds:0x10], 1
     
     sti
@@ -291,16 +320,50 @@ KernStart:
     mov ax, 0x18
     mov ds, ax
     
-    mov eax, dword [ds:0x13600-0x1564]	; Grabbing INFO sector signature
+    mov eax, 1
+    mov ebx, KernSize+1
+    mov edi, 0x13600-0x1564-1
+    mov dx, 18h
+    mov es, dx
+
+    xchg bx, bx
+
+    call ATA.readSectors		; Reading INFO sector
     
-    cmp eax, 0x40045005			; Checking said signature
-    je $
+
+    mov eax, dword [ds:0x13600-0x1565]	; Grabbing INFO sector signature
     
     pop ds
-    
+    pop edi
     push edi
+    add edi, 80*25*2
+    xchg bx, bx
+    
+    cmp eax, 0x40045005			; Checking said signature
+    je .infosigpassed
+    
+
+    mov eax, 0x0C4E0C49			; Printing "INFO" in red
+    mov es:[edi], eax
+    add edi, 4
+    mov eax, 0x0C4F0C46
+    mov es:[edi], eax
+    add edi, 6
+    
+    .error.sig_not_passed:
+   	hlt
+    	jmp .error.sig_not_passed
+    
+    .infosigpassed:
+    	mov eax, 0x0A4E0A49			; Printing "INFO" in green
+    	mov es:[edi], eax
+   	add edi, 4
+   	mov eax, 0x0A4F0A46
+   	mov es:[edi], eax
+   	add edi, 6
+
     mov eax, 3
-    mov ebx, 12
+    mov ebx, KernSize+2
     mov edi, 0x13000-0x1564-1
     mov dx, 18h
     mov es, dx
@@ -309,80 +372,271 @@ KernStart:
 
     call ATA.readSectors		; Reading file descriptor sector
     
-    
-    mov al, [es:0x13600-0x1564+3]	; Getting terminal file number
-    
-    xor ecx, ecx
-    mov cl, al
+    xor eax, eax
+    mov al, [es:0x13600-0x1564+3]	; Getting terminal file number 
     
     xchg bx, bx
-
-    mov eax, 0
-    mov edx, 0
+    mov di, 0x68
+    lldt di
+    mov di, 0x61
+    mov es, di
+    mov di, 0x52
+    mov ds, di
+    xor edi, edi    ;---------------------05 - 0 - Terminal Data
+		    ;100000 - 100600
+    mov bx, 0x0000
+    xor ecx, ecx
+    push eax				; Terminal file number
+    mov cl, al
+    xor eax, eax
+    .fileSelectLoop:
+    	add eax, 20
+	loop .fileSelectLoop
     
-    call StartProgram
+    mov cl, [ds:eax+19-1]
+    shl ecx, 4*2+1			; multiplication by 0x200
+    mov edx, ecx
+    mov ax, dx
+    shr edx, 16
+    mov cx, 0x0FFF
+    div cx
+    inc ax
+    cmp dx, 0
+    jz .noremainder
+    inc ax
+    .noremainder:
+    add ax, 100h
+    mov cx, ax
 
-StartProgram:
+    mov [es:edi], cx
+    push ecx
+    
+    add edi, 2
+    
+    mov [es:edi], bx
+    
+    add edi, 2
+    
+    shr ecx, 4*4
+    and ch, 00001111b
+    or ch, 11010000b
+    shl ecx, 8
+    mov ch, 10110010b
+    mov cl, 0x10
+    mov [es:edi], ecx
+
+    add edi, 4      ;---------------------0B - 1 - Terminal Code
+		    ;100000 - 100600
+    mov bx, 0x0000
+    pop ecx
+    mov [es:edi], cx
+    
+    add edi, 2
+    
+    mov [es:edi], bx
+    
+    add edi, 2
+    
+    shr ecx, 4*4
+    and ch, 00001111b
+    or ch, 11010000b
+    shl ecx, 8
+    mov ch, 10111010b
+    mov cl, 0x10
+    mov [es:edi], ecx
+    
+    pop eax				; Terminal file number
+    
+    mov ebx, 0 				; LDT process data entry
+    call LoadFile
+    mov ax, 1+4
+    mov es, ax
+    mov ebx, 8+4+1
+    call StartFile
+    
+    cli
+    lidt [0x500]			; Triple fault as restart after terminal stops
+    int 255
+
+StartFile:	; ebx - LDT code entry for process, es - lDT data entry for process, fs - Current process LDT data entry.
+	xchg bx, bx
 	pusha
-	push ecx
-
-	xor esi, esi
-
-	selectfileloop:			; Selecting terminal file
-	add esi, 20
-	loop selectfileloop
-    
-    	dec esi
-  	add esi, 0x13000-0x1564
-    
- 	mov al, [es:esi]
- 	mov ebx, edx
-	add ebx, 10+2+3
- 	mov dx, 40h
- 	mov es, dx
-	xor edi, edi
- 	xchg bx, bx
-    	
-	call ATA.readSectors		; Reading terminal file
  	xor edi, edi
 
-    	mov ax, 0x38
-    	mov es, ax
-    	
-    	add edi, 6
-    	
 	xor eax, eax
 	
 	push ds
 	mov ax, 0x18
 	mov ds, ax
-	mov al, [ds:0x19]
+	mov al, [ds:0x14]
 	pop ds
 
-	mov cx, 6
+	mov ecx, 7
 
-	.loop:
-		add edi, eax
-		loop .loop
-	
-    	mov byte [es:edi], 00000001b
+	mul ecx
+	mov edi, eax
+	push ds
+	mov ax, 0x38
+	mov ds, ax
+    	mov byte [ds:edi], 00000001b
     	inc edi
+	mov ax, es
+	mov [edi], ax
     	inc edi
+	inc edi
 	
-	pop ecx
+	mov eax, [es:0x4]
 	
-   	mov dword [es:edi], ecx
+   	mov dword [ds:edi], eax
 	
-	popa
-	pusha
+	push ax
+	mov ax, 0x18
+	mov ds, ax
+	pop ax
+
+	inc dword [0x10]  	; Incrementing the "Current Vidbuffer" #
+	inc dword [0x14]  	; Incrementing the "Next Vidbuffer" #
+	or byte [0x20], 1 	; Seting the Usermode bit in "Keyboard Control"
+	mov ax, es
+	mov [0x21], ax
+	mov eax, [es:0x8] 	; Copying the "Program Keypress location"
+	mov dword [0x23], eax	; Seting the "Keypress location"
+	
+	pop ds
+	push fs
 
 	pushfd
-    	push dword 0x48
-    	push dword eax
+	push dword 0x20
+	push .iret+1
+	
+	push es
+	mov eax, [es:0xC]
+	push eax
+	
+	sti
+	pushfd
+    	push dword ebx
+    	push dword [es:0x0]
     	
+	push es
+	mov ax, 0x70
+	mov es, ax
+	mov eax, esp
+	add eax, 4*6
+	mov es:[0x4], eax
+	pop es
+	
    	xchg bx, bx
-
+	
+	.iret:
    	iret
+	
+	dec dword [0x10]  	; Decrementing the "Current Vidbuffer" #
+	pop es ;pop fs
+	or byte [0x20], 1 	; Seting the Usermode bit in "Keyboard Control"
+	mov ax, es
+	mov [0x21], ax
+	mov eax, [es:0x8] 	; Copying the "Program Keypress location"
+	mov dword [0x23], eax	; Seting the "Keypress location"
+
+	popa
+	
+	ret
+
+LoadFile:	; ebx - LDT Data entry #, al - file number
+	pusha
+	push ebx			; Pushing the LDT entry number
+	
+	xchg bx, bx
+	xor ecx, ecx
+    	mov cl, al
+	mov esi, 0x11A9B
+	xor ebx, ebx
+
+	mov ax, 0x18
+	mov es, ax
+
+	.selectfileloop:		; Selecting file
+	add esi, 20
+	add bl, [es:esi-2]		; Adding to start sector #
+	jnc .selectfileloop.1
+	inc bh
+	
+	.selectfileloop.1:
+	loop .selectfileloop
+   	
+	add esi, 20
+    	
+	xor eax, eax
+ 	mov al, [es:esi-2]
+	add ebx, 1+1+3			; Skiping Descriptor Sectors, INFO sector and Boot sector
+	
+	pop edx	; pop ebx
+	shl edx, 3			; Aligning the number of the LDT entry
+	
+	mov di, 0x60
+	mov es, di
+	
+	xor ecx, ecx
+	mov cx, [es:edx+2]
+	ror ecx, 16
+	mov cl, [es:edx+7]
+	and cl, 1111b
+	ror ecx, 16
+	add ecx, 0xFFF
+	xor edi, edi
+	
+	or edx, 4			; Setting LDT bit
+	mov es, dx
+
+	.clearMem:
+		mov byte [es:edi], 0
+		inc edi
+		loop .clearMem
+		
+ 	xchg bx, bx
+    	xor edi, edi
+
+	call ATA.readSectors		; Reading file
+	
+	popa
+	ret
+
+FuncInit:
+	pusha
+	
+	push es
+	mov ax, 0x30
+	mov es, ax
+	xor edi, edi
+
+	mov word [es:edi], 1
+	mov dword [es:edi+2], Display.ReDraw
+	
+	add edi, 6
+
+	mov word [es:edi], 1
+	mov dword [es:edi+2], Halt
+
+	add edi, 6
+
+	mov word [es:edi], 1
+	mov dword [es:edi+2], StartFile
+	
+	add edi, 6
+
+	mov word [es:edi], 1
+	mov dword [es:edi+2], LoadFile
+
+	add edi, 6
+
+	mov word [es:edi], 1
+	mov dword [es:edi+2], EndProgram
+
+	pop es
+	
+	popa
+	ret
 
 IDT:
     .ModEntry:
@@ -403,7 +657,9 @@ IDT:
         add edi, 2
         
         mov al, 0
-        mov ah, 10001110b
+        mov ah, ch
+
+	
         mov [ds:edi], ax
         
         add edi, 2
@@ -540,6 +796,7 @@ Timer:
 	ret
 
 Syscall_:
+    pushf
     push fs
     pusha
     
@@ -547,12 +804,12 @@ Syscall_:
     mov fs, ax
     
     xor eax, eax
+    cmp ecx, 0
+    je .loopend
+
     .loop:
-        cmp ecx, 0
-        je .loopend
         add eax, 6
-        dec ecx
-        jmp .loop
+        loop .loop
         
     .loopend:
     cmp byte [fs:eax], 1
@@ -560,24 +817,35 @@ Syscall_:
     je .run
     popa
     pop fs
+    popf
     iret
     
     .run:
-        xchg bx, bx
+        ;xchg bx, bx
         inc eax
         inc eax
         
+	push ds
+	mov bx, 0x18
+	mov ds, bx
         mov ebx, [fs:eax]
+	mov [ds:0x1C], ebx
+	pop ds
         
 	cli
-        mov [gs:0], ebx
-        
-        popa
-        call [gs:0]
-        sti
 
-        clc
-        iret
+        popa
+	pop fs
+
+	push ds
+	mov cx, 0x18
+	mov ds, cx
+        call [ds:0x1C]
+	pop ds
+
+        popf
+    clc
+    iret
 
 Display:
     .Clear:
@@ -623,17 +891,24 @@ Display:
         popa
         ret
     
-    .ReDraw:
+    .ReDraw:					; ecx - Vidbuffer #
         ;xchg bx, bx
         pusha
+	
+	push ds
+	mov ax, 0x18
+	mov ds, ax
+	mov ecx, ds:[0x10]
+	pop ds
+	
         xor esi, esi
         xor edi, edi
-        add esi, 2
+        add esi, 3
         cmp ecx, 0
 	jz .ReDraw.loopend
         
         .ReDraw.loop:
-            add esi, 0x6
+            add esi, 0x7
             loop .ReDraw.loop
         
         .ReDraw.loopend:
@@ -643,23 +918,26 @@ Display:
 	mov ax, 0x38
 	mov es, ax
 	
-	mov ax, 0x50
+	mov ax, 0x48
 	
 	mov ebx, [es:esi]
-	sub esi, 2
+	sub esi, 3
 	
 	test byte [es:esi], 00000010b		; Checker for system flag
 	
 	jnz .ReDraw.1
 	
-	mov ax, 0x40
+	mov ax, [es:esi+1]			; Getting the data segment of program
 	
 	.ReDraw.1:
 	
 	mov es, ax
 	mov esi, ebx
+	push gs
+	mov ax, 0x28
+	mov gs, ax
 	
-        .ReDraw.loop2:
+        .ReDraw.loop2:				; Copying to screen
             mov eax, dword [es:esi]
             mov dword [gs:edi], eax
             add edi, 4
@@ -667,15 +945,33 @@ Display:
             
             loop .ReDraw.loop2
         
+	pop gs
         pop es
         popa
         ret
 
 %include 'KernelParts/ATA.asm'
 
+Halt:
+	pushf
+	sti
+	hlt
+	popf
+	ret
+
+EndProgram:	; Returns to the previous program
+	push es
+	mov ax, 0x70
+	mov es, ax
+	mov eax, es:[0x4]
+	pop es
+	mov esp, eax
+    	iret
+
+
 Strings:
     .Panic1:
-        db '                                                                                '
+        db '0123456789ABCDEF                                                                '
         db ',---EXCEPTION----------------------------------------------------------------!!!'
         db '                                                                                '
 	db '                                                                                '
@@ -685,16 +981,16 @@ Strings:
     .Panic3:
         db '                                                                                '
         db '                                                                                '
-        db '                                                                                '
-        db '                                                                                '
         db '  Exception: #// ErrCode: 0x//\\                                                '
         db '                                                                                '
         db '                                                                                '
         db '  EAX: 0x//\\//\\ EBX: 0x//\\//\\ ECX: 0x//\\//\\ EDX: 0x//\\//\\               '
-        db '  ESI: 0x//\\//\\ EDI: 0x//\\//\\                                               '
+        db '  EDI: 0x//\\//\\ ESI: 0x//\\//\\ ESP: 0x//\\//\\                               '
         db '  CS:  0x//\\ DS:  0x//\\ SS:  0x//\\                                           '
         db '                                                                                '
         db '                                EIP:  0x//\\//\\                                '
+	db '                                                                                '
+        db '                                                                                '
         db '                                                                                '
     
     .Panic4:
@@ -706,7 +1002,7 @@ Strings:
         db '                                                                                '
     .HexTable:  db '0123456789ABCDEF'
 
-times 10*512-($-$$) db 0
+times KernSize*512-($-$$) db 0
 
 ;GDT:
     ;.null:

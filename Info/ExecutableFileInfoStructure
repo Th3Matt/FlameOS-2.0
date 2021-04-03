@@ -1,0 +1,4 @@
+entrypoint: 		dword
+expectedVidBufferPos: 	dword
+expectedKeypressPos:	dword
+

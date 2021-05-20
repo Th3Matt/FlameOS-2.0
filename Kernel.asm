@@ -204,6 +204,11 @@ Kernel:
     call PS2.init
     
     mov ch, 10001110b
+    mov ebx, 0
+    mov eax, Exceptions.DE
+
+    call IDT.ModEntry
+    
     mov ebx, 6
     mov eax, Exceptions.UD
 
@@ -244,6 +249,12 @@ Kernel:
     mov ch, 11101110b
     mov ebx, 0x30
     mov eax, Syscall_
+
+    call IDT.ModEntry
+
+    mov ch, 10101110b
+    mov ebx, 0x31
+    mov eax, SyscallDefine
 
     call IDT.ModEntry
     
@@ -531,13 +542,17 @@ StartFile:	; ebx - LDT code entry for process, es - lDT data entry for process, 
 	.iret:
    	iret
 	
-	dec dword [0x10]  	; Decrementing the "Current Vidbuffer" #
 	pop es ;pop fs
+	push ds
+	mov ax, 0x18
+	mov ds, ax
+	dec dword [0x10]  	; Decrementing the "Current Vidbuffer" #
 	or byte [0x20], 1 	; Seting the Usermode bit in "Keyboard Control"
 	mov ax, es
 	mov [0x21], ax
 	mov eax, [es:0x8] 	; Copying the "Program Keypress location"
 	mov dword [0x23], eax	; Seting the "Keypress location"
+	pop ds
 
 	popa
 	
@@ -637,6 +652,28 @@ FuncInit:
 	
 	popa
 	ret
+
+SyscallDefine:	; bx - Syscall info, cl - # of Syscall, edx - Syscall function.
+	pusha
+	
+	push es
+	mov ax, 0x30
+	mov es, ax
+	mov al, 6
+	mov ch, 0
+	ror ecx, 16
+	xor cx, cx
+	ror ecx, 16
+	mul cl
+	mov edi, eax
+
+	mov word [es:edi], bx
+	mov dword [es:edi+2], edx
+	
+	pop es
+	
+	popa
+	iret
 
 IDT:
     .ModEntry:
@@ -798,7 +835,8 @@ Timer:
 Syscall_:
     pushf
     push fs
-    pusha
+    push eax
+    push ebx
     
     mov ax, 0x30
     mov fs, ax
@@ -812,40 +850,79 @@ Syscall_:
         loop .loop
         
     .loopend:
-    cmp byte [fs:eax], 1
+    test byte [fs:eax], 00000001b
     stc
-    je .run
-    popa
+    jnz .run
+    
+    pop ebx
+    pop eax
     pop fs
     popf
     iret
     
     .run:
         ;xchg bx, bx
-        inc eax
-        inc eax
         
-	push ds
-	mov bx, 0x18
-	mov ds, bx
-        mov ebx, [fs:eax]
-	mov [ds:0x1C], ebx
-	pop ds
+        mov ebx, [fs:eax+2]
+	ror ebx, 16
+	mov bh, [fs:eax+1]
         
 	cli
-
-        popa
+	
+	mov ecx, ebx
+        
+ 	pop ebx
+	
+	test byte [eax], 00000010b
+	
+  	pop eax
 	pop fs
+	jnz .UsermodeDefinedSyscall
+	ror ecx, 16
+        call ecx
+    
+    .end:
+    	popf
+   	clc
+   	iret
+    
+    .UsermodeDefinedSyscall:
+    	push cx
+	dec ch
+	shr cx, 8-3
+	and cx, 0000000011111000b
+	or cl, 00000101b
+	mov es, cx
+	pop cx
+	ror cx, 8
+	shl cl, 3
+	or cl, 00000101b
+	
+    	pushfd
+	push dword 0x20
+	push .iret+1
+	
+	push es
+	push dword [es:0xC]
+	
+	sti
+	pushfd
+	push word 0
+    	push word cx
+	inc esp
+	inc esp
+	inc esp
+	push word 0
+	dec esp
+	ror cx, 8
+	mov ch, 0
+	ror ecx, 16
+    	push dword ecx
 
-	push ds
-	mov cx, 0x18
-	mov ds, cx
-        call [ds:0x1C]
-	pop ds
-
-        popf
-    clc
-    iret
+	.iret:
+	iret
+	
+	jmp .end
 
 Display:
     .Clear:
@@ -891,7 +968,7 @@ Display:
         popa
         ret
     
-    .ReDraw:					; ecx - Vidbuffer #
+    .ReDraw:
         ;xchg bx, bx
         pusha
 	

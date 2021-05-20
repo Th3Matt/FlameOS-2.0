@@ -1,7 +1,7 @@
 [ BITS 32 ]
 [ ORG 0x0 ]
 
-VidBuffer equ 0x200*(1+2)
+VidBuffer equ 0x200*(1+3)
 KeyPress equ VidBuffer+80*25*2
 
 INFO:
@@ -15,10 +15,11 @@ Game:
 	sub bx, 8
 	mov ds, bx
 
-	mov edi, VidBuffer+80*2*2
-	mov ecx, 80
-
 	.DrawUI:
+
+		mov edi, VidBuffer+80*2*2
+		mov ecx, 80
+
 		.DrawUI.Loop1:
 			mov byte [edi], '='
 			mov byte [edi+1], 0x0f
@@ -92,11 +93,12 @@ Game:
 		loop .DrawUI.ClearLoop
 
 	mov edi, VidBuffer+80*2*(8+3)+40*2
-	mov word [edi], 0xFF02
+	mov cx, 0xAA02
+	mov word [edi], cx
 	add edi, 80*2
-	mov word [edi], 0xFF02
+	mov word [edi], cx
 	add edi, 80*2
-	mov word [edi], 0xFF02
+	mov word [edi], cx
 	
 	.Main:
 		mov byte [KeyPress], 0
@@ -115,20 +117,23 @@ Game:
 		cmp byte [FoodX], 0
 		jnz .Move.CheckFood
 		
-		mov ax, [Random]
+		mov al, [Random]
 		cmp al, 80
 		jb .Move.FoodXSelected
-		sub al, 80
-		.Move.FoodXSelected:
-		mov byte [FoodX], al
-		shr ax, 8
-
-		cmp al, 25
-		jb .Move.FoodYSelected
-		mov bl, 25
+		mov bl, 80
 		div bl
+		.Move.FoodXSelected:
+		mov byte [FoodX], ah
+		mov dl, [Random+1]
+
+		cmp dl, 21
+		jb .Move.FoodYSelected
+		mov bx, 21
+		mov al, dl
+		xor edx, edx
+		div bx
 		.Move.FoodYSelected:
-		mov byte [FoodY], ah
+		mov byte [FoodY], dl
 		
 		mov edi, VidBuffer
 		xor eax, eax
@@ -172,7 +177,7 @@ Game:
 			add di, ax
 			mov al, [HeadDirection]
 			mov byte [edi], al
-			mov byte [edi+1], 0xFF
+			mov byte [edi+1], 0xAA
 		
 			mov al, [HeadDirection]
 			
@@ -194,7 +199,7 @@ Game:
 			dec byte [HeadY]
 			.Move.Vert.2:
 			
-			jmp .DeleteEnd
+			jmp .Move.CheckSnake
 
 		.Move.Horiz:
 			test al, 2
@@ -211,6 +216,21 @@ Game:
 			inc byte [HeadX]
 			.Move.Horiz.2:
 			
+		.Move.CheckSnake:
+			mov bh, 0
+			mov al, [HeadY]
+			add al, 3
+			mov bl, 80
+			mul bl
+			mov bh, 0
+			mov bl, [HeadX]
+			add ax, bx
+			and eax, 0x0000FFFF
+			shl eax, 1
+			add eax, VidBuffer
+			cmp byte [eax+1], 0xAA
+ 			je .GameOver
+
 		.DeleteEnd:
 			mov edi, VidBuffer
 			xor eax, eax
@@ -226,27 +246,37 @@ Game:
 			mov al, [edi]
 			mov byte [edi+1], 0x00
 			
-			mov bl, [HeadX]
-			sub bl, [EndX]
-			jnc .DeleteEnd.XDistance
-			mov bl, [EndX]
-			sub bl, [HeadX]
-			.DeleteEnd.XDistance:
+			cmp byte [HeadDirection], 1
+			jl .DeleteEnd.Check1
+			je .DeleteEnd.Check2
+			cmp byte [HeadDirection], 4
+			jl .DeleteEnd.Check3
+			je .DeleteEnd.Check4
 			
-			mov cl, [HeadY]
-			sub cl, [EndY]
-			jnc .DeleteEnd.YDistance
+			.DeleteEnd.Check1:
 
-			mov cl, [EndY]
-			sub cl, [HeadY]
+			cmp byte [HeadY], 0
+			jne .DeleteEnd.Exec
+			jmp .Main
 
-			.DeleteEnd.YDistance:
+			.DeleteEnd.Check2:
 
-			add bl, cl
-			jc .Main
-			cmp bl, [Length]
-			jna .Main
+			cmp byte [HeadX], 79
+			jne .DeleteEnd.Exec
+			jmp .Main
+			
+			.DeleteEnd.Check3:
 
+			cmp byte [HeadX], 24-3
+			jne .DeleteEnd.Exec
+			jmp .Main
+
+			.DeleteEnd.Check4:
+
+			cmp byte [HeadX], 0
+			jne .DeleteEnd.Exec
+			jmp .Main
+			
 			.DeleteEnd.Exec:
 			test byte [edi], 1
 			jnz .DeleteEnd.Horiz
@@ -337,6 +367,26 @@ Game:
 
 		.keyPressed.ClearPressed:
 			jmp .Main
+	.GameOver:
+		mov edi, VidBuffer+80*2*(8+3)+(40-5)*2
+		mov ah, 0xF4
+		mov esi, SnakeGameOver
+		
+		.GameOver.Loop:
+			mov al, [esi]
+			cmp al, 0
+			jz .GameOver.PostLoop
+			mov [edi], ax
+			inc esi
+			inc edi
+			inc edi
+			jmp .GameOver.Loop
+		.GameOver.PostLoop:
+			mov ecx, 1
+			int 0x30
+			cmp byte [KeyPress], 0x10
+			jne .GameOver.PostLoop
+			jmp .DrawUI
 
 CountOfCycles: db 0
 HeadX: db 40
@@ -345,13 +395,14 @@ EndX: db 40
 EndY: db 8
 FoodX: db 0
 FoodY: db 0
-SnakeText: db 'SNAKE  0.1', 0
+SnakeText: db 'SNAKE  0.2', 0
 SnakeHelp: db 'Spacebar to begin, q to quit, WASD to move', 0
+SnakeGameOver: db 'GAME OVER', 0
 
 Random: dw 0
 			; 	010	000	000     000
 HeadDirection: db 1 ; -->	000 - 0 001 - 1 000 - 2 100 - 3	
 Length: db 3		; 	000	000	010     000
 Score: dd 0
-times 512*2-($-Game) db 0
+times 512*3-($-Game) db 0
 

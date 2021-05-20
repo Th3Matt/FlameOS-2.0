@@ -178,9 +178,10 @@ ATA:
 	out dx, al
 	
 	add dx, 5		;7
-	mov al, 20h 
+	mov eax, 20h 
 	out dx, al
-	
+	push ecx
+
 	.readSectors.wait:
 	    in al, dx
 	    
@@ -189,17 +190,22 @@ ATA:
 	
 	    test al, 00001000b
 	    jnz .readSectors.read
-	
+	    
+	    inc ecx
+	    cmp ecx, 0x1312D00
+	    jnl .readSectors.error
 	    jmp .readSectors.wait
 	
 	
 	.readSectors.error:
+	    push ecx
 	    pop eax
 	    stc
 	    jmp .readSectors.end
 	
 	
 	.readSectors.read:
+	    pop ecx
 	    pop eax
 	    mov ecx, eax
 	    xor eax, eax

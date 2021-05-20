@@ -14,23 +14,28 @@ INFO:
 times 0x200-($-INFO) db 0
 
 Terminal:
+	mov bx, es
+	shr bx, 3
+	inc bx
+	shl bx, 8
+	or bl, 00000011b
+	mov cl, 5
+	mov edx, AllocateMemory
+	int 0x31
+	
 	mov ax, 0x0+4+1
 	mov ds, ax
 
 	.resetPrompt:
 		mov edi, VidBuffer
 		xor ecx, ecx
-		xor eax, eax
 		mov cl, [CurrentLine]
-		mov ebx, 80*2
-		cmp ecx, 0
-		jz .resetPrompt.lineloopend
+		mov eax, 80*2
+		
+		mul ecx
 
-		.resetPrompt.lineloop:
-			add edi, ebx
-			loop .resetPrompt.lineloop
-		.resetPrompt.lineloopend:
-
+		add edi, eax
+		xor eax, eax
 
 		mov esi, FlameSH_Prompt
 		mov ah, 0x0f
@@ -56,11 +61,13 @@ Terminal:
 	test byte [KeyboardControlSpecial], 2
 	jz .input.skipcaps
 
-	add esi, 0xF0
+	add esi, 0xBB
 	.input.skipcaps:
 
 	xor eax, eax
 	mov al, [KeyPress]
+	cmp al, 0xBB
+	ja .inputend
 	add esi, eax
 	
 	mov al, [esi]
@@ -75,15 +82,12 @@ Terminal:
 	
 	xor ecx, ecx
 	mov cl, [CurrentLine]
-	mov ebx, 0x50*2
-	cmp ecx, 0
-	jz .lineloopend
+	push eax
+	mov eax, 0x50*2
+	mul ecx
+	add edi, eax
+	pop eax
 
-	.lineloop:
-		add edi, ebx
-		loop .lineloop
-	.lineloopend:
-	
 	mov ah, 0x0f
 	mov [edi], ax
 	inc byte [PointerPos]
@@ -100,7 +104,7 @@ Terminal:
 		
 	.inputenter:
 		test byte [KeyboardControlSpecial], 1
-		jnz .inputloop
+		jnz .inputend
 		
 		xchg bx, bx
 		inc byte [CurrentLine]
@@ -108,18 +112,13 @@ Terminal:
 		mov edi, 0x400+0x1000	
 		mov esi, VidBuffer+PromptLen*2
 
-		mov ebx, 0x50*2
+		mov eax, 0x50*2
 		xor ecx, ecx
 		mov cl, [CurrentLine]
 		dec ecx
-		cmp ecx, 0
-		je .inputenter.lineloopend
+		mul ecx
+		add esi, eax
 		
-		.inputenter.lineloop:
-			add esi, ebx
-			loop .inputenter.lineloop
-		.inputenter.lineloopend:
-
 		call FileFind
 		jc .inputenter.notfound
 		
@@ -142,13 +141,13 @@ Terminal:
 		mov bx, 0x60+1
 		mov es, bx
 		xor ebx, ebx
-		mov edi, CurrentLDTEntry
+		mov edi, NextLDTEntry
 		push ds
 		mov ax, 0x0+4+1
 		mov ds, ax
 		
-		inc byte [edi]
-		inc byte [edi]
+		inc word [edi]
+		inc word [edi]
 		mov bx, [edi]
 		pop ds
 		
@@ -216,7 +215,7 @@ Terminal:
 		mov ebx, 0x2
 		mov edi, 2
 		mov ecx, 3
-		int 0x30
+		int 0x30 ;Calling LoadFile
 		
 		mov ax, 0x10+4+2
 		mov es, ax
@@ -224,13 +223,16 @@ Terminal:
 		mov ecx, 2
 		mov dx, 0x0+4+1
 		mov fs, dx
-		int 0x30
+		push ds
+		int 0x30 ;Calling StartFile
+		pop ds
 		
 		.inputenter.newline:
 			
 		inc byte [CurrentLine]
 		or byte [KeyboardControlSpecial], 1
 		mov byte [PointerPos], 0
+		mov byte [KeyPress], 0
 		jmp .resetPrompt
 	
 	.inputenter.notfound:
@@ -238,15 +240,10 @@ Terminal:
 		xor ecx, ecx
 		xor eax, eax
 		mov cl, [CurrentLine]
-		mov ebx, 80*2
-		cmp ecx, 0
-		jz .inputenter.notfound.lineloopend
-
-		.inputenter.notfound.lineloop:
-			add edi, ebx
-			loop .inputenter.notfound.lineloop
-		.inputenter.notfound.lineloopend:
-
+		mov eax, 80*2
+		mul ecx
+		add edi, eax
+		
 		mov esi, FlameSH_NF
 		mov ah, 0x0f
 
@@ -280,15 +277,10 @@ Terminal:
 		
 		xor ecx, ecx
 		mov cl, [CurrentLine]
-		mov ebx, 0x50*2
-		cmp ecx, 0
-		jz .inputdelete.lineloopend
-
-		.inputdelete.lineloop:
-			add edi, ebx
-			loop .inputdelete.lineloop
-		.inputdelete.lineloopend:
-
+		mov eax, 0x50*2
+		mul ecx
+		add edi, eax
+		
 		mov ax, 0x0f00
 		mov [edi], ax
 		jmp .inputend
@@ -330,7 +322,7 @@ FileFind:
 		xor ebx, ebx
 		add edi, 20
 		inc ecx
-		cmp ecx, 0x200*3
+		cmp edi, 0x200*3
 		jl .NameCheck
 		stc
 		jmp .NameCheck.end
@@ -359,6 +351,51 @@ FileFind:
 		pop edi
 		ret
 
+AllocateMemory: ; eax - # of pages to allocate
+	pusha
+	push es
+	
+	mov ecx, eax
+	mov ax, 0x60+1
+	mov es, ax
+	xor eax, eax
+	xor ebx, ebx
+	mov ax, [NextLDTEntry]
+	shl eax, 3
+
+	add cx, [es:eax]
+	mov bx, [es:eax]
+
+    	mov [es:edi], cx
+    	
+   	add edi, 2
+    	
+	shl ebx, 8+4
+	add ebx, 0x1000
+    	mov [es:edi], bx
+    	
+    	add edi, 2
+    			
+    	shr ecx, 4*4
+    	and ch, 00001111b
+    	or ch, 11010000b
+    	shl ecx, 8
+    	mov ch, 11010010b
+	ror ebx, 16
+    	mov cl, bl
+	
+	ror ebx, 16
+    	mov [es:edi], ecx
+
+	inc byte [NumberOfAllocatedLDTEntries]
+	inc word [NextLDTEntry]
+	
+	pop es
+	popa
+	mov ecx, 4
+	int 30h
+
+
 FlameSH_Prompt: db 'FlameShell| ', 0
 FlameSH_NF:     db 'FSH: File not found. ', 0
 
@@ -377,8 +414,6 @@ ScanMap:
 	times 0xBA-($-ScanMap) db 0
 	
 	db 0x3
-	
-        times 0xF0-($-ScanMap) db 0
 
 ScanMap2:
      	db 0x0, 0x0, '1', '2', '3', '4', '5', '6', '7', '8'
@@ -395,11 +430,10 @@ ScanMap2:
 	times 0xBA-($-ScanMap2) db 0
 	
 	db 0x3
-	
-        times 0xF0-($-ScanMap2) db 0
 
 
 db 0x11, 0x55
 
-CurrentLDTEntry: db 0
-times 0x200*3-($-Terminal) db 0
+NextLDTEntry: dw 0
+times 0x200*3-($-Terminal)-1 db 0
+NumberOfAllocatedLDTEntries: db 0
